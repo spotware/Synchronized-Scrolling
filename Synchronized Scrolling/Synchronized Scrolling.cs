@@ -8,63 +8,97 @@ namespace cAlgo
     [Indicator(IsOverlay = true, TimeZone = TimeZones.UTC, AccessRights = AccessRights.None)]
     public class SynchronizedScrolling : Indicator
     {
-        private static ConcurrentDictionary<string, SymbolCharts> _symbolCharts = new ConcurrentDictionary<string, SymbolCharts>();
+        private static ConcurrentDictionary<string, SymbolIndicatorInstances> _indicatorInstances = new ConcurrentDictionary<string, SymbolIndicatorInstances>();
 
-        private SymbolCharts _charts;
+        private SymbolIndicatorInstances _symbolIndicatorInstances;
+
+        private DateTime _lastScrollTime;
+
+        [Parameter("Mode", DefaultValue = Mode.All)]
+        public Mode Mode { get; set; }
 
         protected override void Initialize()
         {
-            if (_symbolCharts.ContainsKey(SymbolName) == false)
+            if (_indicatorInstances.ContainsKey(SymbolName) == false)
             {
-                _charts = new SymbolCharts();
+                _symbolIndicatorInstances = new SymbolIndicatorInstances();
 
-                _symbolCharts.AddOrUpdate(SymbolName, _charts, (key, oldValue) => _charts);
+                _indicatorInstances.AddOrUpdate(SymbolName, _symbolIndicatorInstances, (key, oldValue) => _symbolIndicatorInstances);
             }
             else
             {
-                _charts = _symbolCharts[SymbolName];
+                _symbolIndicatorInstances = _indicatorInstances[SymbolName];
             }
 
-            _charts.Add(Chart);
+            _symbolIndicatorInstances.Add(Chart, this);
 
             Chart.ScrollChanged += Chart_ScrollChanged;
         }
 
         private void Chart_ScrollChanged(ChartScrollEventArgs obj)
         {
-            if (_charts.ScrollingChart != null) return;
+            var firstBarTime = obj.Chart.Bars.OpenTimes[obj.Chart.FirstVisibleBarIndex];
 
-            _charts.ScrollingChart = obj.Chart;
+            if (_lastScrollTime == firstBarTime || _symbolIndicatorInstances.ScrollingChart != null) return;
+
+            _lastScrollTime = firstBarTime;
+
+            _symbolIndicatorInstances.ScrollingChart = obj.Chart;
 
             try
             {
-                var firstBarTime = obj.Chart.Bars.OpenTimes[obj.Chart.FirstVisibleBarIndex];
-
-                foreach (var chart in _charts.GetCharts())
+                if (Mode == Mode.Symbol)
                 {
-                    if (chart == obj.Chart) continue;
-
-                    if (chart.Bars[0].OpenTime > firstBarTime)
+                    ScrollCharts(_symbolIndicatorInstances, Chart, firstBarTime);
+                }
+                else
+                {
+                    foreach (var symbolInstances in _indicatorInstances)
                     {
-                        while (chart.Bars[0].OpenTime <= firstBarTime)
+                        if (Mode == Mode.TimeFrame)
                         {
-                            var numberOfLoadedBars = chart.Bars.LoadMoreHistory();
-
-                            if (numberOfLoadedBars == 0)
-                            {
-                                chart.DrawStaticText("ScrollError", "Can't load more data to keep in sync with other charts as more historical data is not available for this chart", VerticalAlignment.Bottom, HorizontalAlignment.Left, Color.Red);
-
-                                break;
-                            }
+                            ScrollCharts(symbolInstances.Value, Chart, firstBarTime, indicator => indicator.TimeFrame == TimeFrame);
+                        }
+                        else
+                        {
+                            ScrollCharts(symbolInstances.Value, Chart, firstBarTime);
                         }
                     }
-
-                    chart.ScrollXTo(firstBarTime);
                 }
             }
             finally
             {
-                _charts.ScrollingChart = null;
+                _symbolIndicatorInstances.ScrollingChart = null;
+            }
+        }
+
+        private void ScrollCharts(SymbolIndicatorInstances instances, Chart scrolledChart, DateTime firstBarTime, Func<Indicator, bool> predicate = null)
+        {
+            foreach (var indicator in instances.GetIndicators())
+            {
+                if (indicator.Chart == scrolledChart || (predicate != null && predicate(indicator) == false)) continue;
+
+                if (indicator.Chart.Bars[0].OpenTime > firstBarTime)
+                {
+                    indicator.BeginInvokeOnMainThread(() => LoadeMoreBars(indicator.Chart, firstBarTime));
+                }
+
+                indicator.BeginInvokeOnMainThread(() => indicator.Chart.ScrollXTo(firstBarTime));
+            }
+        }
+
+        private void LoadeMoreBars(Chart chart, DateTime firstBarTime)
+        {
+            while (chart.Bars[0].OpenTime <= firstBarTime)
+            {
+                var numberOfLoadedBars = chart.Bars.LoadMoreHistory();
+
+                if (numberOfLoadedBars == 0)
+                {
+                    chart.DrawStaticText("ScrollError", "Can't load more data to keep in sync with other charts as more historical data is not available for this chart", VerticalAlignment.Bottom, HorizontalAlignment.Left, Color.Red);
+
+                    break;
+                }
             }
         }
 
@@ -73,37 +107,44 @@ namespace cAlgo
         }
     }
 
-    public class SymbolCharts
+    public class SymbolIndicatorInstances
     {
-        private readonly ConcurrentDictionary<string, Chart> _charts = new ConcurrentDictionary<string, Chart>();
+        private readonly ConcurrentDictionary<string, Indicator> _indicators = new ConcurrentDictionary<string, Indicator>();
 
         public Chart ScrollingChart { get; set; }
 
-        public void Add(Chart chart)
+        public void Add(Chart chart, Indicator indicator)
         {
-            if (GetChartKey(ScrollingChart).Equals(GetChartKey(chart), StringComparison.Ordinal))
+            var chartKey = GetChartKey(chart);
+
+            if (GetChartKey(ScrollingChart).Equals(chartKey, StringComparison.Ordinal))
             {
                 ScrollingChart = null;
 
                 ScrollingChart.ScrollXTo(ScrollingChart.Bars.OpenTimes[ScrollingChart.FirstVisibleBarIndex]);
             }
 
-            _charts.AddOrUpdate(GetChartKey(chart), chart, (k, oldValue) => chart);
+            _indicators.AddOrUpdate(chartKey, indicator, (k, oldValue) => indicator);
         }
 
-        public IEnumerable<Chart> GetCharts()
+        public IEnumerable<Indicator> GetIndicators()
         {
-            foreach (var chartKeyValue in _charts)
+            foreach (var indicatorKeyValue in _indicators)
             {
-                var chart = chartKeyValue.Value;
-
-                yield return chart;
+                yield return indicatorKeyValue.Value;
             }
         }
 
         private string GetChartKey(Chart chart)
         {
-            return chart == null ? string.Empty : string.Format("{0}_{1}_{2}_{3:o}", chart.SymbolName, chart.TimeFrame, chart.ChartType, DateTime.UtcNow);
+            return chart == null ? string.Empty : string.Format("{0}_{1}_{2}", chart.SymbolName, chart.TimeFrame, chart.ChartType);
         }
+    }
+
+    public enum Mode
+    {
+        All,
+        TimeFrame,
+        Symbol
     }
 }
