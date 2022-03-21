@@ -37,20 +37,25 @@ namespace cAlgo
             Print("ScrollXTo Called | ", SymbolName, " | ", TimeFrame);
             BeginInvokeOnMainThread(() =>
             {
-                while (Bars[0].OpenTime > dateTime)
-                {
-                    var numberOfLoadedBars = Bars.LoadMoreHistory();
-
-                    if (numberOfLoadedBars == 0)
-                    {
-                        Chart.DrawStaticText("ScrollError", "Can't load more data to keep in sync with other charts as more historical data is not available for this chart", VerticalAlignment.Bottom, HorizontalAlignment.Left, Color.Red);
-
-                        break;
-                    }
-                }
+                LoadMoreHistory(dateTime);
 
                 Chart.ScrollXTo(dateTime);
             });
+        }
+
+        private void LoadMoreHistory(DateTime dateTime)
+        {
+            while (Bars[0].OpenTime > dateTime)
+            {
+                var numberOfLoadedBars = Bars.LoadMoreHistory();
+
+                if (numberOfLoadedBars == 0)
+                {
+                    Chart.DrawStaticText("ScrollError", "Can't load more data to keep in sync with other charts as more historical data is not available for this chart", VerticalAlignment.Bottom, HorizontalAlignment.Left, Color.Red);
+
+                    break;
+                }
+            }
         }
 
         private void Chart_ScrollChanged(ChartScrollEventArgs obj)
