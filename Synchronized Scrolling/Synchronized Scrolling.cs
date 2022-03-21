@@ -32,10 +32,33 @@ namespace cAlgo
             Chart.ScrollChanged += Chart_ScrollChanged;
         }
 
+        public void ScrollXTo(DateTime dateTime)
+        {
+            Print("ScrollXTo Called | ", SymbolName, " | ", TimeFrame);
+            BeginInvokeOnMainThread(() =>
+            {
+                while (Bars[0].OpenTime > dateTime)
+                {
+                    var numberOfLoadedBars = Bars.LoadMoreHistory();
+
+                    if (numberOfLoadedBars == 0)
+                    {
+                        Chart.DrawStaticText("ScrollError", "Can't load more data to keep in sync with other charts as more historical data is not available for this chart", VerticalAlignment.Bottom, HorizontalAlignment.Left, Color.Red);
+
+                        break;
+                    }
+                }
+
+                Chart.ScrollXTo(dateTime);
+            });
+        }
+
         private void Chart_ScrollChanged(ChartScrollEventArgs obj)
         {
             if (_numberOfChartsToScroll > 0)
             {
+                Print("_numberOfChartsToScroll > 0 | ", _numberOfChartsToScroll);
+
                 Interlocked.Decrement(ref _numberOfChartsToScroll);
 
                 return;
@@ -71,11 +94,6 @@ namespace cAlgo
             {
                 if (indicator.Chart == scrolledChart || (predicate != null && predicate(indicator) == false)) continue;
 
-                if (indicator.Chart.Bars[0].OpenTime > firstBarTime)
-                {
-                    indicator.BeginInvokeOnMainThread(() => LoadeMoreBars(indicator.Chart, firstBarTime));
-                }
-
                 toScroll.Add(indicator);
             }
 
@@ -83,22 +101,9 @@ namespace cAlgo
 
             foreach (var indicator in toScroll)
             {
-                indicator.BeginInvokeOnMainThread(() => indicator.Chart.ScrollXTo(firstBarTime));
-            }
-        }
+                Print("Scrolling | {0} | {1}", indicator.SymbolName, _numberOfChartsToScroll);
 
-        private void LoadeMoreBars(Chart chart, DateTime firstBarTime)
-        {
-            while (chart.Bars[0].OpenTime <= firstBarTime)
-            {
-                var numberOfLoadedBars = chart.Bars.LoadMoreHistory();
-
-                if (numberOfLoadedBars == 0)
-                {
-                    chart.DrawStaticText("ScrollError", "Can't load more data to keep in sync with other charts as more historical data is not available for this chart", VerticalAlignment.Bottom, HorizontalAlignment.Left, Color.Red);
-
-                    break;
-                }
+                indicator.ScrollXTo(firstBarTime);
             }
         }
 
