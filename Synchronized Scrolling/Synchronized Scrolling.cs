@@ -1,80 +1,73 @@
 ﻿using cAlgo.API;
 using System.Collections.Concurrent;
-using System.Collections.Generic;
 using System;
+using System.Collections.Generic;
+using System.Threading;
 
 namespace cAlgo
 {
     [Indicator(IsOverlay = true, TimeZone = TimeZones.UTC, AccessRights = AccessRights.None)]
     public class SynchronizedScrolling : Indicator
     {
-        private static ConcurrentDictionary<string, SymbolIndicatorInstances> _indicatorInstances = new ConcurrentDictionary<string, SymbolIndicatorInstances>();
+        private static ConcurrentDictionary<string, SynchronizedScrolling> _indicatorInstances = new ConcurrentDictionary<string, SynchronizedScrolling>();
 
-        private SymbolIndicatorInstances _symbolIndicatorInstances;
+        private static int _numberOfChartsToScroll;
 
         private DateTime _lastScrollTime;
+
+        private string _chartKey;
 
         [Parameter("Mode", DefaultValue = Mode.All)]
         public Mode Mode { get; set; }
 
         protected override void Initialize()
         {
-            if (_indicatorInstances.ContainsKey(SymbolName) == false)
-            {
-                _symbolIndicatorInstances = new SymbolIndicatorInstances();
+            _chartKey = string.Format("{0}_{1}_{2}", SymbolName, TimeFrame, Chart.ChartType);
 
-                _indicatorInstances.AddOrUpdate(SymbolName, _symbolIndicatorInstances, (key, oldValue) => _symbolIndicatorInstances);
-            }
-            else
+            if (_indicatorInstances.ContainsKey(_chartKey) == false)
             {
-                _symbolIndicatorInstances = _indicatorInstances[SymbolName];
+                _indicatorInstances.AddOrUpdate(_chartKey, this, (key, value) => this);
             }
-
-            _symbolIndicatorInstances.Add(Chart, this);
 
             Chart.ScrollChanged += Chart_ScrollChanged;
         }
 
         private void Chart_ScrollChanged(ChartScrollEventArgs obj)
         {
+            if (_numberOfChartsToScroll > 0)
+            {
+                Interlocked.Decrement(ref _numberOfChartsToScroll);
+
+                return;
+            }
+
             var firstBarTime = obj.Chart.Bars.OpenTimes[obj.Chart.FirstVisibleBarIndex];
 
-            if (_lastScrollTime == firstBarTime || _symbolIndicatorInstances.ScrollingChart != null) return;
+            if (_lastScrollTime == firstBarTime) return;
 
             _lastScrollTime = firstBarTime;
 
-            _symbolIndicatorInstances.ScrollingChart = obj.Chart;
+            switch (Mode)
+            {
+                case Mode.Symbol:
+                    ScrollCharts(Chart, firstBarTime, indicator => indicator.SymbolName.Equals(SymbolName, StringComparison.Ordinal));
+                    break;
 
-            try
-            {
-                if (Mode == Mode.Symbol)
-                {
-                    ScrollCharts(_symbolIndicatorInstances, Chart, firstBarTime);
-                }
-                else
-                {
-                    foreach (var symbolInstances in _indicatorInstances)
-                    {
-                        if (Mode == Mode.TimeFrame)
-                        {
-                            ScrollCharts(symbolInstances.Value, Chart, firstBarTime, indicator => indicator.TimeFrame == TimeFrame);
-                        }
-                        else
-                        {
-                            ScrollCharts(symbolInstances.Value, Chart, firstBarTime);
-                        }
-                    }
-                }
-            }
-            finally
-            {
-                _symbolIndicatorInstances.ScrollingChart = null;
+                case Mode.TimeFrame:
+                    ScrollCharts(Chart, firstBarTime, indicator => indicator.TimeFrame == TimeFrame);
+                    break;
+
+                default:
+                    ScrollCharts(Chart, firstBarTime);
+                    break;
             }
         }
 
-        private void ScrollCharts(SymbolIndicatorInstances instances, Chart scrolledChart, DateTime firstBarTime, Func<Indicator, bool> predicate = null)
+        private void ScrollCharts(Chart scrolledChart, DateTime firstBarTime, Func<Indicator, bool> predicate = null)
         {
-            foreach (var indicator in instances.GetIndicators())
+            var toScroll = new List<SynchronizedScrolling>(_indicatorInstances.Values.Count);
+
+            foreach (var indicator in _indicatorInstances.Values)
             {
                 if (indicator.Chart == scrolledChart || (predicate != null && predicate(indicator) == false)) continue;
 
@@ -83,6 +76,13 @@ namespace cAlgo
                     indicator.BeginInvokeOnMainThread(() => LoadeMoreBars(indicator.Chart, firstBarTime));
                 }
 
+                toScroll.Add(indicator);
+            }
+
+            Interlocked.CompareExchange(ref _numberOfChartsToScroll, toScroll.Count, _numberOfChartsToScroll);
+
+            foreach (var indicator in toScroll)
+            {
                 indicator.BeginInvokeOnMainThread(() => indicator.Chart.ScrollXTo(firstBarTime));
             }
         }
@@ -104,40 +104,6 @@ namespace cAlgo
 
         public override void Calculate(int index)
         {
-        }
-    }
-
-    public class SymbolIndicatorInstances
-    {
-        private readonly ConcurrentDictionary<string, Indicator> _indicators = new ConcurrentDictionary<string, Indicator>();
-
-        public Chart ScrollingChart { get; set; }
-
-        public void Add(Chart chart, Indicator indicator)
-        {
-            var chartKey = GetChartKey(chart);
-
-            if (GetChartKey(ScrollingChart).Equals(chartKey, StringComparison.Ordinal))
-            {
-                ScrollingChart = null;
-
-                ScrollingChart.ScrollXTo(ScrollingChart.Bars.OpenTimes[ScrollingChart.FirstVisibleBarIndex]);
-            }
-
-            _indicators.AddOrUpdate(chartKey, indicator, (k, oldValue) => indicator);
-        }
-
-        public IEnumerable<Indicator> GetIndicators()
-        {
-            foreach (var indicatorKeyValue in _indicators)
-            {
-                yield return indicatorKeyValue.Value;
-            }
-        }
-
-        private string GetChartKey(Chart chart)
-        {
-            return chart == null ? string.Empty : string.Format("{0}_{1}_{2}", chart.SymbolName, chart.TimeFrame, chart.ChartType);
         }
     }
 
