@@ -3,10 +3,11 @@ using System.Collections.Concurrent;
 using System;
 using System.Collections.Generic;
 using System.Threading;
+using System.IO;
 
 namespace cAlgo
 {
-    [Indicator(IsOverlay = true, TimeZone = TimeZones.UTC, AccessRights = AccessRights.None)]
+    [Indicator(IsOverlay = true, TimeZone = TimeZones.UTC, AccessRights = AccessRights.FileSystem)]
     public class SynchronizedScrolling : Indicator
     {
         private static ConcurrentDictionary<string, SynchronizedScrolling> _indicatorInstances = new ConcurrentDictionary<string, SynchronizedScrolling>();
@@ -22,7 +23,7 @@ namespace cAlgo
 
         protected override void Initialize()
         {
-            _chartKey = string.Format("{0}_{1}_{2}", SymbolName, TimeFrame, Chart.ChartType);
+            _chartKey = GetChartKey(this);
 
             if (_indicatorInstances.ContainsKey(_chartKey) == false)
             {
@@ -32,15 +33,17 @@ namespace cAlgo
             Chart.ScrollChanged += Chart_ScrollChanged;
         }
 
+        public override void Calculate(int index)
+        {
+        }
+
         public void ScrollXTo(DateTime dateTime)
         {
-            Print("ScrollXTo Called | ", SymbolName, " | ", TimeFrame);
-            BeginInvokeOnMainThread(() =>
-            {
-                LoadMoreHistory(dateTime);
+            Log("ScrollXTo Called | {0} | {1}", SymbolName, TimeFrame);
 
-                Chart.ScrollXTo(dateTime);
-            });
+            //LoadMoreHistory(dateTime);
+
+            Chart.ScrollXTo(dateTime);
         }
 
         private void LoadMoreHistory(DateTime dateTime)
@@ -51,11 +54,17 @@ namespace cAlgo
 
                 if (numberOfLoadedBars == 0)
                 {
+                    Log("Bar Load issue");
+
                     Chart.DrawStaticText("ScrollError", "Can't load more data to keep in sync with other charts as more historical data is not available for this chart", VerticalAlignment.Bottom, HorizontalAlignment.Left, Color.Red);
 
                     break;
                 }
+
+                Log("Loading bars");
             }
+
+            Log("Bars loaded");
         }
 
         private void Chart_ScrollChanged(ChartScrollEventArgs obj)
@@ -106,14 +115,41 @@ namespace cAlgo
 
             foreach (var indicator in toScroll)
             {
-                Print("Scrolling | {0} | {1}", indicator.SymbolName, _numberOfChartsToScroll);
+                Print("Scrolling | {0} | {1} | {2}", indicator.SymbolName, indicator.TimeFrame, _numberOfChartsToScroll);
 
-                indicator.ScrollXTo(firstBarTime);
+                try
+                {
+                    indicator.ScrollXTo(firstBarTime);
+                }
+                catch (Exception ex)
+                {
+                    Print("An instance removed because of exception: | {0} | {1} | {2}", indicator.SymbolName, indicator.TimeFrame, ex);
+
+                    SynchronizedScrolling removedInstance;
+
+                    _indicatorInstances.TryRemove(GetChartKey(indicator), out removedInstance);
+
+                    Interlocked.Decrement(ref _numberOfChartsToScroll);
+                }
             }
         }
 
-        public override void Calculate(int index)
+        private void Log(string format, params object[] args)
         {
+            var log = string.Format(format, args);
+
+            var logFolder = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "cAlgo", "logs");
+
+            if (Directory.Exists(logFolder) == false) Directory.CreateDirectory(logFolder);
+
+            var logFilePath = Path.Combine(logFolder, string.Format("{0}.txt", _chartKey));
+
+            File.AppendAllLines(logFilePath, new string[] { log });
+        }
+
+        private string GetChartKey(SynchronizedScrolling indicator)
+        {
+            return string.Format("{0}_{1}_{2}", indicator.SymbolName, indicator.TimeFrame, indicator.Chart.ChartType);
         }
     }
 
