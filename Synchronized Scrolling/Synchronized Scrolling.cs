@@ -14,6 +14,8 @@ namespace cAlgo
 
         private static int _numberOfChartsToScroll;
 
+        private ConcurrentQueue<DateTime> _scrollTimesQueue = new ConcurrentQueue<DateTime>();
+
         private DateTime _lastScrollTime;
 
         private string _chartKey;
@@ -31,17 +33,34 @@ namespace cAlgo
             }
 
             Chart.ScrollChanged += Chart_ScrollChanged;
+
+            Timer.Start(1);
+        }
+
+        protected override void OnTimer()
+        {
+            DateTime time;
+
+            if (_scrollTimesQueue.TryDequeue(out time))
+            {
+                ScrollXTo(time);
+            }
         }
 
         public override void Calculate(int index)
         {
         }
 
+        public void EnqueueScrollTime(DateTime time)
+        {
+            _scrollTimesQueue.Enqueue(time);
+        }
+
         public void ScrollXTo(DateTime dateTime)
         {
-            Log("ScrollXTo Called | {0} | {1}", SymbolName, TimeFrame);
+            Log("ScrollXTo Called | {0} | {1} | {2:o}", SymbolName, TimeFrame, dateTime);
 
-            //LoadMoreHistory(dateTime);
+            LoadMoreHistory(dateTime);
 
             Chart.ScrollXTo(dateTime);
         }
@@ -54,8 +73,6 @@ namespace cAlgo
 
                 if (numberOfLoadedBars == 0)
                 {
-                    Log("Bar Load issue");
-
                     Chart.DrawStaticText("ScrollError", "Can't load more data to keep in sync with other charts as more historical data is not available for this chart", VerticalAlignment.Bottom, HorizontalAlignment.Left, Color.Red);
 
                     break;
@@ -63,16 +80,12 @@ namespace cAlgo
 
                 Log("Loading bars");
             }
-
-            Log("Bars loaded");
         }
 
         private void Chart_ScrollChanged(ChartScrollEventArgs obj)
         {
             if (_numberOfChartsToScroll > 0)
             {
-                Print("_numberOfChartsToScroll > 0 | ", _numberOfChartsToScroll);
-
                 Interlocked.Decrement(ref _numberOfChartsToScroll);
 
                 return;
@@ -119,7 +132,7 @@ namespace cAlgo
 
                 try
                 {
-                    indicator.ScrollXTo(firstBarTime);
+                    indicator.EnqueueScrollTime(firstBarTime);
                 }
                 catch (Exception ex)
                 {
