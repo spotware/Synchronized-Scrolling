@@ -10,11 +10,9 @@ namespace cAlgo
     [Indicator(IsOverlay = true, TimeZone = TimeZones.UTC, AccessRights = AccessRights.FileSystem)]
     public class SynchronizedScrolling : Indicator
     {
-        private static ConcurrentDictionary<string, SynchronizedScrolling> _indicatorInstances = new ConcurrentDictionary<string, SynchronizedScrolling>();
+        private static ConcurrentDictionary<string, WeakReference> _indicatorInstances = new ConcurrentDictionary<string, WeakReference>();
 
         private static int _numberOfChartsToScroll;
-
-        private ConcurrentQueue<DateTime> _scrollTimesQueue = new ConcurrentQueue<DateTime>();
 
         private DateTime _lastScrollTime;
 
@@ -23,67 +21,81 @@ namespace cAlgo
         [Parameter("Mode", DefaultValue = Mode.All)]
         public Mode Mode { get; set; }
 
+        public DateTime? TimeToScroll { get; set; }
+
         protected override void Initialize()
         {
             _chartKey = GetChartKey(this);
 
-            if (_indicatorInstances.ContainsKey(_chartKey) == false)
+            SynchronizedScrolling oldIndicatr;
+
+            if (GetIndicator(_chartKey, out oldIndicatr))
             {
-                _indicatorInstances.AddOrUpdate(_chartKey, this, (key, value) => this);
+                TimeToScroll = oldIndicatr.TimeToScroll;
+
+                if (TimeToScroll.HasValue)
+                {
+                    Log("TimeToScroll: {0:dd MMM yyyy HH:mm:ss}", TimeToScroll.Value);
+                }
+                else
+                {
+                    Log("TimeToScroll: null");
+                }
+            }
+            else
+            {
+            }
+
+            var weakReference = new WeakReference(this);
+
+            _indicatorInstances.AddOrUpdate(_chartKey, weakReference, (key, value) => weakReference);
+
+            if (TimeToScroll.HasValue)
+            {
+                ScrollXTo(TimeToScroll.Value);
             }
 
             Chart.ScrollChanged += Chart_ScrollChanged;
-
-            Timer.Start(1);
-        }
-
-        protected override void OnTimer()
-        {
-            DateTime time;
-
-            if (_scrollTimesQueue.TryDequeue(out time))
-            {
-                ScrollXTo(time);
-            }
         }
 
         public override void Calculate(int index)
         {
         }
 
-        public void EnqueueScrollTime(DateTime time)
+        public void ScrollXTo(DateTime time)
         {
-            _scrollTimesQueue.Enqueue(time);
+            TimeToScroll = time;
+
+            Log("ScrollXTo Called | {0} | {1} | {2:dd MMM yyyy HH:mm:ss}", SymbolName, TimeFrame, time);
+
+            LoadMoreHistory(time);
+
+            Log("Chart.ScrollXTo Called | {0} | {1} | {2:dd MMM yyyy HH:mm:ss}", SymbolName, TimeFrame, time);
+
+            Chart.ScrollXTo(time);
         }
 
-        public void ScrollXTo(DateTime dateTime)
+        private void LoadMoreHistory(DateTime time)
         {
-            Log("ScrollXTo Called | {0} | {1} | {2:o}", SymbolName, TimeFrame, dateTime);
-
-            LoadMoreHistory(dateTime);
-
-            Chart.ScrollXTo(dateTime);
-        }
-
-        private void LoadMoreHistory(DateTime dateTime)
-        {
-            while (Bars[0].OpenTime > dateTime)
+            if (Bars[0].OpenTime > time)
             {
                 var numberOfLoadedBars = Bars.LoadMoreHistory();
 
                 if (numberOfLoadedBars == 0)
                 {
-                    Chart.DrawStaticText("ScrollError", "Can't load more data to keep in sync with other charts as more historical data is not available for this chart", VerticalAlignment.Bottom, HorizontalAlignment.Left, Color.Red);
-
-                    break;
+                    Chart.DrawStaticText("ScrollError", "Synchronized Scrolling: Can't load more data to keep in sync with other charts as more historical data is not available for this chart", VerticalAlignment.Bottom, HorizontalAlignment.Left, Color.Red);
                 }
-
-                Log("Loading bars");
+                else
+                {
+                    Log("Loading bars");
+                }
             }
         }
 
         private void Chart_ScrollChanged(ChartScrollEventArgs obj)
         {
+            TimeToScroll = null;
+
             if (_numberOfChartsToScroll > 0)
             {
                 Interlocked.Decrement(ref _numberOfChartsToScroll);
@@ -100,47 +112,49 @@ namespace cAlgo
             switch (Mode)
             {
                 case Mode.Symbol:
-                    ScrollCharts(Chart, firstBarTime, indicator => indicator.SymbolName.Equals(SymbolName, StringComparison.Ordinal));
+                    ScrollCharts(firstBarTime, indicator => indicator.SymbolName.Equals(SymbolName, StringComparison.Ordinal));
                     break;
 
                 case Mode.TimeFrame:
-                    ScrollCharts(Chart, firstBarTime, indicator => indicator.TimeFrame == TimeFrame);
+                    ScrollCharts(firstBarTime, indicator => indicator.TimeFrame == TimeFrame);
                     break;
 
                 default:
-                    ScrollCharts(Chart, firstBarTime);
+                    ScrollCharts(firstBarTime);
                     break;
             }
         }
 
-        private void ScrollCharts(Chart scrolledChart, DateTime firstBarTime, Func<Indicator, bool> predicate = null)
+        private void ScrollCharts(DateTime firstBarTime, Func<Indicator, bool> predicate = null)
         {
             var toScroll = new List<SynchronizedScrolling>(_indicatorInstances.Values.Count);
 
-            foreach (var indicator in _indicatorInstances.Values)
+            foreach (var indicatorWeakReference in _indicatorInstances)
             {
-                if (indicator.Chart == scrolledChart || (predicate != null && predicate(indicator) == false)) continue;
+                if (indicatorWeakReference.Value.IsAlive == false) continue;
+
+                var indicator = (SynchronizedScrolling)indicatorWeakReference.Value.Target;
+
+                if (indicator == this || (predicate != null && predicate(indicator) == false)) continue;
 
                 toScroll.Add(indicator);
             }
 
             Interlocked.CompareExchange(ref _numberOfChartsToScroll, toScroll.Count, _numberOfChartsToScroll);
 
+            Print("Charts To Scroll: ", _numberOfChartsToScroll);
+
             foreach (var indicator in toScroll)
             {
-                Print("Scrolling | {0} | {1} | {2}", indicator.SymbolName, indicator.TimeFrame, _numberOfChartsToScroll);
-
                 try
                 {
-                    indicator.EnqueueScrollTime(firstBarTime);
+                    Print("Scrolling | {0} | {1} | {2} | {3:dd MMM yyyy HH:mm:ss}", indicator.SymbolName, indicator.TimeFrame, _numberOfChartsToScroll, firstBarTime);
+
+                    indicator.ScrollXTo(firstBarTime);
                 }
                 catch (Exception ex)
                 {
-                    Print("An instance removed because of exception: | {0} | {1} | {2}", indicator.SymbolName, indicator.TimeFrame, ex);
-
-                    SynchronizedScrolling removedInstance;
-
-                    _indicatorInstances.TryRemove(GetChartKey(indicator), out removedInstance);
+                    Log("An instance scrolling caused exception: | {0} | {1} | {2}", indicator.SymbolName, indicator.TimeFrame, ex);
 
                     Interlocked.Decrement(ref _numberOfChartsToScroll);
                 }
@@ -163,6 +177,22 @@ namespace cAlgo
         private string GetChartKey(SynchronizedScrolling indicator)
         {
             return string.Format("{0}_{1}_{2}", indicator.SymbolName, indicator.TimeFrame, indicator.Chart.ChartType);
+        }
+
+        private bool GetIndicator(string chartKey, out SynchronizedScrolling indicator)
+        {
+            WeakReference weakReference;
+
+            if (_indicatorInstances.TryGetValue(chartKey, out weakReference) && weakReference.IsAlive)
+            {
+                indicator = (SynchronizedScrolling)weakReference.Target;
+
+                return true;
+            }
+
+            indicator = null;
+
+            return false;
         }
     }
 
