@@ -3,11 +3,10 @@ using System.Collections.Concurrent;
 using System;
 using System.Collections.Generic;
 using System.Threading;
-using System.IO;
 
 namespace cAlgo
 {
-    [Indicator(IsOverlay = true, TimeZone = TimeZones.UTC, AccessRights = AccessRights.FileSystem)]
+    [Indicator(IsOverlay = true, TimeZone = TimeZones.UTC, AccessRights = AccessRights.None)]
     public class SynchronizedScrolling : Indicator
     {
         private static ConcurrentDictionary<string, IndicatorInstanceContainer<SynchronizedScrolling, DateTime?>> _indicatorInstances = new ConcurrentDictionary<string, IndicatorInstanceContainer<SynchronizedScrolling, DateTime?>>();
@@ -29,22 +28,6 @@ namespace cAlgo
 
             GetIndicatorInstanceContainer(_chartKey, out oldIndicatorContainer);
 
-            //if (oldIndicatorContainer != null)
-            //{
-            //    if (oldIndicatorContainer.Data.HasValue)
-            //    {
-            //        Log("TimeToScroll: {0:dd MMM yyyy HH:mm:ss}", oldIndicatorContainer.Data.Value);
-            //    }
-            //    else
-            //    {
-            //        Log("TimeToScroll: null");
-            //    }
-            //}
-            //else
-            //{
-            //    Log("No old indicator");
-            //}
-
             _indicatorInstances.AddOrUpdate(_chartKey, new IndicatorInstanceContainer<SynchronizedScrolling, DateTime?>(this), (key, value) => new IndicatorInstanceContainer<SynchronizedScrolling, DateTime?>(this));
 
             if (oldIndicatorContainer != null && oldIndicatorContainer.Data.HasValue)
@@ -61,8 +44,6 @@ namespace cAlgo
 
         public void ScrollXTo(DateTime time)
         {
-            //Log("ScrollXTo Called | {0} | {1} | {2:dd MMM yyyy HH:mm:ss}", SymbolName, TimeFrame, time);
-
             IndicatorInstanceContainer<SynchronizedScrolling, DateTime?> indicatorContainer;
 
             if (GetIndicatorInstanceContainer(_chartKey, out indicatorContainer))
@@ -76,16 +57,12 @@ namespace cAlgo
             }
             else
             {
-                //Log("Chart.ScrollXTo Called | {0} | {1} | {2:dd MMM yyyy HH:mm:ss}", SymbolName, TimeFrame, time);
-
                 Chart.ScrollXTo(time);
             }
         }
 
         private void LoadMoreHistory()
         {
-            //Log("Loading bars");
-
             var numberOfLoadedBars = Bars.LoadMoreHistory();
 
             if (numberOfLoadedBars == 0)
@@ -147,36 +124,17 @@ namespace cAlgo
 
             Interlocked.CompareExchange(ref _numberOfChartsToScroll, toScroll.Count, _numberOfChartsToScroll);
 
-            //Log("Charts To Scroll: ", _numberOfChartsToScroll);
-
             foreach (var indicator in toScroll)
             {
                 try
                 {
-                    //Log("Scrolling | {0} | {1} | {2} | {3:dd MMM yyyy HH:mm:ss}", indicator.SymbolName, indicator.TimeFrame, _numberOfChartsToScroll, firstBarTime);
-
                     indicator.ScrollXTo(firstBarTime);
                 }
-                catch (Exception ex)
+                catch (Exception)
                 {
-                    //Print("An instance scrolling caused exception: | {0} | {1} | {2}", indicator.SymbolName, indicator.TimeFrame, ex);
-
                     Interlocked.Decrement(ref _numberOfChartsToScroll);
                 }
             }
-        }
-
-        private void Log(string format, params object[] args)
-        {
-            var log = string.Format(format, args);
-
-            var logFolder = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "cAlgo", "logs");
-
-            if (Directory.Exists(logFolder) == false) Directory.CreateDirectory(logFolder);
-
-            var logFilePath = Path.Combine(logFolder, string.Format("{0}.txt", _chartKey));
-
-            File.AppendAllLines(logFilePath, new string[] { log });
         }
 
         private string GetChartKey(SynchronizedScrolling indicator)
