@@ -164,7 +164,7 @@ namespace cAlgo
 
     public class IndicatorInstanceContainer<T, TData> where T : Indicator
     {
-        public readonly WeakReference _indicatorWeakReference;
+        private readonly WeakReference _indicatorWeakReference;
 
         public IndicatorInstanceContainer(T indicator)
         {
