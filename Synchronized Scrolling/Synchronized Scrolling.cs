@@ -89,7 +89,8 @@ namespace cAlgo
 
             var firstBarTime = obj.Chart.Bars.OpenTimes[obj.Chart.FirstVisibleBarIndex];
 
-            if (_lastScrollTime == firstBarTime) return;
+            if (_lastScrollTime == firstBarTime)
+                return;
 
             _lastScrollTime = firstBarTime;
 
@@ -102,8 +103,9 @@ namespace cAlgo
                 case Mode.TimeFrame:
                     ScrollCharts(firstBarTime, indicator => indicator.TimeFrame == TimeFrame);
                     break;
-
                 default:
+
+
                     ScrollCharts(firstBarTime);
                     break;
             }
@@ -117,7 +119,8 @@ namespace cAlgo
             {
                 SynchronizedScrolling indicator;
 
-                if (indicatorContianer.Value.GetIndicator(out indicator) == false || indicator == this || (predicate != null && predicate(indicator) == false)) continue;
+                if (indicatorContianer.Value.GetIndicator(out indicator) == false || indicator == this || (predicate != null && predicate(indicator) == false))
+                    continue;
 
                 toScroll.Add(indicator);
             }
@@ -128,9 +131,8 @@ namespace cAlgo
             {
                 try
                 {
-                    indicator.ScrollXTo(firstBarTime);
-                }
-                catch (Exception)
+                    indicator.BeginInvokeOnMainThread(() => indicator.ScrollXTo(firstBarTime));
+                } catch (Exception)
                 {
                     Interlocked.Decrement(ref _numberOfChartsToScroll);
                 }
